@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-Time Geolocation Tracker</title>
+    <style>
+        #map {
+            height: 500px;
+            width: 100%;
+        }
+        #distance {
+            font-size: 18px;
+            margin-top: 10px;
+        }
+        button {
+            margin-top: 10px;
+        }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBHratHA1jE0sA5ErM-hZkbLUrgv2r66KQ&callback=initMap" async defer></script>
+    <script>
+        let map;
+        let totalDistance = 0;
+        let previousLatLng;
+        let path = [];
+        let polyline;
+        let ws;
+        let isClearing = false;
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                zoom: 8,
+                center: { lat: 40.712776, lng: -74.005974 } // Default to New York
+            });
+        }
+
+        function calculateDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371; // Radius of the Earth in km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLng = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        function addMarker(lat, lng) {
+            const latLng = new google.maps.LatLng(lat, lng);
+            path.push(latLng);
+
+            new google.maps.Marker({
+                position: latLng,
+                map: map
+            });
+
+            if (previousLatLng) {
+                const distance = calculateDistance(previousLatLng.lat(), previousLatLng.lng(), lat, lng);
+                totalDistance += distance;
+                document.getElementById('distance').innerText = 'Total Distance: ' + totalDistance.toFixed(2) + ' km';
+            }
+
+            previousLatLng = latLng;
+
+            if (polyline) {
+                polyline.setPath(path);
+            } else {
+                polyline = new google.maps.Polyline({
+                    path: path,
+                    geodesic: true,
+                    strokeColor: '#FF0000',
+                    strokeOpacity: 1.0,
+                    strokeWeight: 2,
+                    map: map
+                });
+            }
+
+            const bounds = new google.maps.LatLngBounds();
+            path.forEach(function(point) {
+                bounds.extend(point);
+            });
+            map.fitBounds(bounds);
+        }
+
+        function clearTracking() {
+            if (isClearing) return;
+
+            isClearing = true;
+            fetch('/clear', { method: 'POST' })
+                .then(response => response.text())
+                .then(() => {
+                    path = [];
+                    totalDistance = 0;
+                    document.getElementById('distance').innerText = 'Total Distance: 0 km';
+                    previousLatLng = null;
+
+                    if (polyline) {
+                        polyline.setMap(null);
+                        polyline = null;
+                    }
+
+                    isClearing = false;
+                })
+                .catch(error => {
+                    console.error('Error clearing tracking:', error);
+                    isClearing = false;
+                });
+        }
+
+        function setupWebSocket() {
+            ws = new WebSocket("ws://localhost:8282/ws");
+            ws.onmessage = function(event) {
+                console.log("Message received: ", event.data);
+                const loc = JSON.parse(event.data);
+                if (loc.type === "clear") {
+                    clearTracking();
+                } else if (loc.lat !== undefined && loc.lng !== undefined) {
+                    addMarker(loc.lat, loc.lng);
+                } else {
+                    console.error("Invalid location data received:", loc);
+                }
+            };
+
+            ws.onopen = function() {
+                console.log("Connected to WebSocket");
+            };
+
+            ws.onclose = function() {
+                console.log("Disconnected from WebSocket");
+                setTimeout(setupWebSocket, 1000);
+            };
+
+            ws.onerror = function(error) {
+                console.error("WebSocket error:", error);
+            };
+        }
+
+        document.addEventListener("DOMContentLoaded", function() {
+            setupWebSocket();
+        });
+    </script>
+</head>
+<body>
+    <h1>Real-Time Geolocation Tracker</h1>
+    <div id="map"></div>
+    <p id="distance">Total Distance: 0 km</p>
+    <button onclick="clearTracking()">Clear</button>
+</body>
+</html>
